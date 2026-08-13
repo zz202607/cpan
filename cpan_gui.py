@@ -677,30 +677,38 @@ class CpanApp(tk.Tk):
         self._poll()
 
     def _poll(self):
+        # drain the queue in batches, otherwise hundreds of progress
+        # messages pile up and the bar appears frozen
         try:
-            kind, *payload = self.q.get_nowait()
+            while True:
+                kind, *payload = self.q.get_nowait()
+                if kind == "log":
+                    self.log(payload[0])
+                elif kind == "ui":
+                    payload[0]()
+                elif kind == "progress":
+                    pct, text = payload
+                    self.pbar["value"] = pct
+                    self.plabel.configure(text=text)
+                elif kind == "done":
+                    on_done, result, err = payload
+                    self.busy = False
+                    if self.pbar["value"] > 0:
+                        # keep "100% 完成" visible briefly, then reset
+                        self.plabel.configure(text="完成")
+                        self.after(1500, self._reset_progress)
+                    if err:
+                        self.log(f"出错：{err}")
+                    elif on_done:
+                        on_done(result)
         except queue.Empty:
-            self.after(120, self._poll)
-            return
-        if kind == "log":
-            self.log(payload[0])
-        elif kind == "ui":
-            payload[0]()
-        elif kind == "progress":
-            pct, text = payload
-            self.pbar["value"] = pct
-            self.plabel.configure(text=text)
-        elif kind == "done":
-            on_done, result, err = payload
-            self.busy = False
-            self.pbar["value"] = 0
-            self.plabel.configure(text="就绪")
-            if err:
-                self.log(f"出错：{err}")
-            elif on_done:
-                on_done(result)
+            pass
         if self.busy:
-            self.after(120, self._poll)
+            self.after(80, self._poll)
+
+    def _reset_progress(self):
+        self.pbar["value"] = 0
+        self.plabel.configure(text="就绪")
 
 
 def main():
