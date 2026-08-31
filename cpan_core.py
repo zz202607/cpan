@@ -477,29 +477,41 @@ def move_path(src: str, dst_dir: str, confirm: bool = False,
     report = {"dry_run": not confirm, "src": src, "size": src_size,
               "dst": "", "ok": False, "note": ""}
 
-    free = shutil.disk_usage(dst_dir).free
-    if free < src_size * 1.05:  # small margin for metadata
-        report["note"] = (f"目标盘空间不足"
-                          f"（剩余 {fmt_size(free)}，需要 {fmt_size(src_size)}）")
-        return report
-
     final_dst = os.path.join(dst_dir, os.path.basename(src))
     if os.path.exists(final_dst):
         report["note"] = f"目标位置已存在同名: {final_dst}"
         return report
     report["dst"] = final_dst
+
+    same_drive = (os.path.splitdrive(src)[0].lower()
+                  == os.path.splitdrive(final_dst)[0].lower())
+    if not same_drive:
+        # Same-drive moves are renames and need no free space; only a real
+        # cross-drive copy must be refused when the target volume is full.
+        free = shutil.disk_usage(dst_dir).free
+        if free < src_size * 1.05:  # small margin for metadata
+            report["note"] = (f"目标盘空间不足"
+                              f"（剩余 {fmt_size(free)}，需要 {fmt_size(src_size)}）")
+            return report
     if not confirm:
         report["note"] = "dry-run: 未执行"
         return report
 
     rp = ProgressReporter(src_size, progress)
-    same_drive = (os.path.splitdrive(src)[0].lower()
-                  == os.path.splitdrive(final_dst)[0].lower())
     try:
         if os.path.isdir(src) and not same_drive:
             # cross-drive: manual copy with progress, then delete source
             os.makedirs(final_dst, exist_ok=True)
-            _copy_tree(src, final_dst, rp, "搬移中")
+            skipped = _copy_tree(src, final_dst, rp, "搬移中")
+            if skipped:
+                # Data-loss guard: the copy was incomplete, so the source
+                # must stay intact. Drop the partial destination copy.
+                shutil.rmtree(final_dst, ignore_errors=True)
+                report["note"] = (f"复制未完成（{skipped} 个文件失败，可能被占用），"
+                                  "源目录未动。请关闭相关程序后重试。")
+                oplog("MOVE", f"{src} -> {final_dst}",
+                      f"FAIL(copy-skipped={skipped})")
+                return report
             shutil.rmtree(src, ignore_errors=True)
             if os.path.exists(src):
                 report["note"] = ("复制完成，但源目录有被占用的文件没删掉。"
@@ -695,7 +707,8 @@ def move_app(src: str, dst_root: str, confirm: bool = False,
     if low.startswith("c:\\windows"):
         report["note"] = "C:\\Windows 内的组件禁止搬动"
         return report
-    if low.startswith(os.environ.get("USERPROFILE", "").lower()) :
+    up = os.environ.get("USERPROFILE", "").lower()
+    if up and (low == up or low.startswith(up + os.sep)):
         report["note"] = "用户目录内的程序请用『文件搬家』，不要走联接"
         return report
     if not os.path.isdir(dst_root):
@@ -725,6 +738,15 @@ def move_app(src: str, dst_root: str, confirm: bool = False,
         report["note"] = f"复制失败（源未动）: {exc}"
         oplog("APP-MOVE", f"{src} -> {final}", f"FAIL({exc})")
         return report
+    if skipped:
+        # Data-loss guard: some files never made it to the destination
+        # (usually locked by the running app). Deleting the source now
+        # would lose them — abort with the source untouched.
+        shutil.rmtree(final, ignore_errors=True)
+        report["note"] = (f"复制未完成（{skipped} 个文件失败，通常是软件还在运行）。\n"
+                          "源目录未动。请彻底关闭该软件（含托盘/后台进程）后重试。")
+        oplog("APP-MOVE", f"{src} -> {final}", f"FAIL(copy-skipped={skipped})")
+        return report
     shutil.rmtree(src, ignore_errors=True)
     if os.path.exists(src):
         report["note"] = ("复制已完成，但源目录有文件被占用没删掉（软件没关干净？）。\n"
@@ -732,12 +754,11 @@ def move_app(src: str, dst_root: str, confirm: bool = False,
                           f"源残留: {src}\n完整副本: {final}")
         oplog("APP-MOVE", f"{src} -> {final}", "FAIL(src-locked)")
         return report
-    if skipped:
-        report["skipped_files"] = skipped
     rp.finish("建立联接")
 
     mk = subprocess.run(["cmd", "/c", "mklink", "/J", src, final],
-                        capture_output=True, text=True)
+                        capture_output=True)  # bytes: cmd may print GBK
+    mk_err = (mk.stderr or b"").decode("mbcs", errors="replace")
     if mk.returncode != 0 or not is_junction(src):
         try:  # clear any half-made link before rolling back
             if is_junction(src):
@@ -748,7 +769,7 @@ def move_app(src: str, dst_root: str, confirm: bool = False,
             pass
         try:  # rollback: put the folder back where it was
             shutil.move(final, src)
-            report["note"] = f"建联接失败，已自动还原: {mk.stderr.strip()}"
+            report["note"] = f"建联接失败，已自动还原: {mk_err.strip()}"
         except Exception as exc:
             report["note"] = (f"!! 联接失败且还原失败: {exc} "
                               f"文件在 {final}，请手动移回 {src}")

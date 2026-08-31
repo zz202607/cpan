@@ -51,6 +51,31 @@ python cpan.py bigfiles --dir "$USERPROFILE" --min-mb 300
 
 所有破坏性命令不带 `--yes` 时只打印计划，不做任何改动。
 
+## 测试
+
+```bash
+cd /d/my-project/Cpan
+python -m pip install pytest     # 仅首次
+python -m pytest                 # 全量：134 项（约 2 秒）
+python -m pytest tests/test_move.py   # 只跑搬家/联接
+```
+
+测试覆盖（`tests/` 目录，全部离线沙箱化，不触碰真实回收站与系统目录）：
+
+| 文件 | 覆盖 |
+|---|---|
+| `test_protection.py` | 保护路径：大小写/分隔符/`..`归一化/盘符根/环境变量展开/合法路径放行 |
+| `test_junk.py` | 垃圾类别结构、扫描计量、白名单删除、缩略图前缀过滤、被占用文件跳过、dry-run/执行、管理员分级 |
+| `test_custom.py` | 扩展名/体积/天数过滤的组合、回收站路径、保护路径拒绝 |
+| `test_move.py` | 文件搬家与联接搬家：dry-run、空间校验、同名冲突、回滚，以及**回归测试：复制未完整时绝不删源目录** |
+| `test_junction.py` | 真实 NTFS 联接的识别与透传计量 |
+| `test_uninstall.py` | MSI `/I{}`→`/X{}` 转换、静默串优先、退出码语义、dry-run 不启动 |
+| `test_cli.py` | 命令行接线：不带 `--yes` 一律不执行 |
+| `test_utils.py` / `test_stats.py` | 工具函数与目录计量 |
+
+测试即验收：安全规则（白名单、回收站兜底、保护路径、默认 dry-run）
+都在测试里以行为级断言固化，改代码前先跑一遍。
+
 ## 安全说明
 
 - **自动删除只发生在白名单目录**（临时文件、浏览器 Cache、缩略图、

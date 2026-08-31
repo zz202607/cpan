@@ -4,3 +4,7 @@ __pycache__/
 
 # Runtime artifacts
 logs/
+
+# Test artifacts
+.pytest_cache/
+.coverage
