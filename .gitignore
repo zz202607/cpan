@@ -8,3 +8,14 @@ logs/
 # Test artifacts
 .pytest_cache/
 .coverage
+
+# Packaging / local build artifacts
+build/
+dist/
+*.spec
+_installtest/
+_research/
+_icon_preview.png
+_exe_check.png
+_setup_check.png
+gui-probe.log

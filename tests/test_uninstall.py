@@ -101,3 +101,14 @@ def test_c_drive_apps_excludes_userprofile_and_junctions(monkeypatch, tmp_path):
         _item(name="NoLocation", install_location=""),
     ])
     assert core.c_drive_apps() == []
+
+
+def test_elevation_required_mentions_admin(monkeypatch):
+    def boom(cmd, **k):
+        exc = OSError("elevation required")
+        exc.winerror = 740
+        raise exc
+    monkeypatch.setattr(core.subprocess, "Popen", boom)
+    rep = core.uninstall_program(_item(uninstall="app.exe"), confirm=True)
+    assert rep["ok"] is False
+    assert "管理员" in rep["note"]

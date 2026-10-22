@@ -27,17 +27,27 @@
 | 系统临时文件 | `C:\Windows\Temp` | 系统/服务的临时文件 | 是 |
 | Windows 更新缓存 | `C:\Windows\SoftwareDistribution\Download` | 已安装更新的安装包缓存 | 是 |
 | 缩略图缓存 | `%LocalAppData%\Microsoft\Windows\Explorer\thumbcache_*.db` | 资源管理器缩略图，会自动重建 | 否 |
-| Chrome 缓存 | `%LocalAppData%\Google\Chrome\User Data\*\Cache`、`*\Code Cache` | 浏览器网页缓存，删后自动重建（**不碰书签、密码、历史记录**） | 否 |
-| Edge 缓存 | `%LocalAppData%\Microsoft\Edge\User Data\*\Cache`、`*\Code Cache` | 同上 | 否 |
+| Chrome 缓存 | `%LocalAppData%\Google\Chrome\User Data\*\Cache`、`*\Code Cache`、`*\GPUCache`、`*\ShaderCache` | 浏览器网页/着色器缓存，删后自动重建（**不碰书签、密码、历史记录**） | 否 |
+| Edge 缓存 | `%LocalAppData%\Microsoft\Edge\User Data\*\Cache`、`*\Code Cache`、`*\GPUCache`、`*\ShaderCache` | 同上 | 否 |
 | Firefox 缓存 | `%LocalAppData%\Mozilla\Firefox\Profiles\*\cache2` | 同上 | 否 |
-| Windows.old | `C:\Windows.old` | 系统升级后的旧系统备份，占用巨大；确认不需要回滚后再删 | 是 |
-| 回收站 | 各盘 `$Recycle.Bin` | 通过 `SHEmptyRecycleBinW` API 清空 | 否 |
+| Windows.old | `C:\Windows.old` | 系统升级后的旧系统备份，占用巨大；确认不需要回滚后再删；**默认不勾选** | 是 |
+| 回收站 | 各盘 `$Recycle.Bin` | 通过 `SHEmptyRecycleBinW` API 清空；**默认不勾选** | 否 |
 | 系统错误报告 | `C:\ProgramData\Microsoft\Windows\WER` | 崩溃转储/报告 | 是 |
 | DirectX 着色器缓存 | `%LocalAppData%\D3DSCache` | 显卡着色器缓存，自动重建 | 否 |
+| 崩溃转储 | `%LocalAppData%\CrashDumps` | 程序崩溃 dump，可重建 | 否 |
+| 系统网页缓存 | `%LocalAppData%\Microsoft\Windows\INetCache` | IE/旧版组件临时网页缓存 | 否 |
+| 传递优化缓存 | `C:\Windows\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache` | Windows 更新分发缓存，自动重建 | 是 |
+| 开发工具缓存 | `%LocalAppData%\pip\Cache`、`%LocalAppData%\npm-cache`、`%LocalAppData%\uv\cache` | 可重建，但下次安装会重新下载；**默认不勾选** | 否 |
 
-**注意**：浏览器只删 `Cache` / `Code Cache` / `cache2` 子目录，绝不删 User Data 根目录——
-那里有书签、密码、扩展、聊天记录。微信/QQ/钉钉的文件（`Documents\WeChat Files` 等）
-属于用户数据，**不做自动清理**，只提供"文件搬家"功能让用户自己决定移走。
+**注意**：浏览器只删 `Cache` / `Code Cache` / `GPUCache` / `ShaderCache` / `cache2`
+子目录，绝不删 User Data 根目录——那里有书签、密码、扩展、聊天记录。
+微信/QQ/钉钉的文件（`Documents\WeChat Files` 等）属于用户数据，**不做自动清理**，
+只提供"文件搬家"功能让用户自己决定移走。
+
+**推荐项规则**：每个类别带 `default` 标记。一键智能清理只选 `default=True`
+且当前权限可执行的类别；回收站、Windows.old、开发工具缓存默认不选，
+必须由用户手动勾选。管理员权限不足时，`needs_admin` 类别显示为不可勾选，
+点击该行会引导用户以管理员身份重启。
 
 ---
 
@@ -61,10 +71,12 @@
 ## 4. 各功能实现要点
 
 ### 4.1 垃圾清理
-- 逐类别 `os.walk` 统计大小（忽略权限错误，`onerror` 静默跳过）。
+- 逐类别 `os.walk` 统计大小（忽略权限错误，`onerror` 静默跳过）；
+  扫描进度按类别回调，界面显示当前类别而不是冻结。
 - 删除用 `os.remove` / `shutil.rmtree(ignore_errors=False)`，逐文件 try/except：
   被占用的文件跳过并计数，最后汇报"跳过 N 个正在使用的文件"——这是正常现象，不是错误。
 - 浏览器正在运行时其缓存文件会被占用，跳过即可，无需强制关闭浏览器。
+- 管理员专属类别在普通模式下仍显示已测大小，但不可勾选，并提示提权。
 
 ### 4.2 自定义清理（不要的文件）
 - 两种用法：直接指定文件/文件夹；或指定一个目录 + 过滤规则。
@@ -85,13 +97,15 @@
 ### 4.4 软件卸载
 - 从注册表**只读**枚举已安装程序（`Uninstall` 键：DisplayName / UninstallString / EstimatedSize）。
 - 跳过 `SystemComponent=1`（系统组件）和更新补丁（有 `ParentKeyName`）。
-- 卸载方式：优先 `winget uninstall --id <Id> --silent`（干净、静默）；
-  没有 winget 则执行注册表里的 `QuietUninstallString` / `UninstallString`。
-- 机器级安装的卸载需要管理员权限；权限不足时明确提示"请右键以管理员身份运行本程序"。
+- 卸载方式：执行注册表里的 `QuietUninstallString`（优先）或 `UninstallString`，
+  等待官方卸载器退出并记录退出码；MSI 的 `/I{code}` 自动改写为 `/X{code}`。
+- 机器级安装的卸载需要管理员权限；普通模式下 Popen 可能被 WinError 740
+  拒绝，此时明确提示用户先以管理员身份重启 Cpan，而不是静默失败。
 
 ### 4.5 大文件查找
 - 用户选目录（默认用户目录）→ 递归找 ≥ 阈值（默认 500MB）的文件 → 按大小排序列出。
-- 只列出来供用户判断，不自动删；用户可选手动删除（走回收站）或搬家。
+- 扫描过程中定期回报已扫文件数；支持停止；跳过目录联接以免循环。
+- 只列出来供用户判断，不自动删；用户可搜索、多选、手动删除（走回收站）或搬家。
 
 ### 4.6 软件搬家（目录联接 junction 方式）
 - 目标：把装在 C 盘的软件整体搬到 D 盘等其他位置，且**不影响使用**。
@@ -102,6 +116,8 @@
   （移回文件夹、删掉联接）。
 - 枚举来源：注册表 Uninstall 键的 `InstallLocation`，只保留真实存在、
   位于 C 盘、且不在黑名单（C:\Windows 等）里的目录。
+- 搬移 Program Files 内的软件需要管理员权限；普通模式下先拒绝并提示提权，
+  避免复制完成后无法删除源目录、留下重复副本。目标路径位于源目录内部时一律拒绝。
 - 执行流程：校验目标空间 → 移动目录（跨盘=复制+删除）→ `mklink /J` 建联接
   → 透过联接校验总大小一致。**任一步失败自动回滚**：联接失败就把目录移回原位。
 - 风险与限制（界面会提示用户）：
@@ -118,20 +134,89 @@
 - dry-run 模式不落日志（还没真正动手）；日志只记录实际执行的动作。
 - 日志本身不清理、不轮转（体积很小），用户可随时删除整个 logs 目录。
 
+### 4.8 空间分析
+
+- 只读功能：选择目录后，统计其**直接子项**（文件夹递归计量、文件单独计量），
+  按大小降序排列并显示占比条，双击文件夹可继续下钻。
+- 统计时通过 `on_begin` 先插入占位行，再逐项回填大小，避免长时间空白。
+- 目录联接（junction）列出类型但按 0 字节计，防止循环/重复计量。
+- 支持停止：`should_stop` 在子项之间及 `_dir_stats` 每 1024 个文件处检查。
+- 不清理、不修改任何文件。
+
+### 4.9 系统工具（需管理员）
+
+- **系统组件清理**：调用 `dism.exe /Online /Cleanup-Image /StartComponentCleanup`。
+  绝不手动删除 `WinSxS`，也**不使用 `/ResetBase`**，保留卸载已安装更新的能力。
+  耗时可能数分钟，后台线程运行，界面显示不确定进度；完成后刷新磁盘占用。
+- **关闭休眠**：先读取 `C:\hiberfil.sys` 大小，确认后用 `powercfg /h off`
+  关闭休眠并释放该文件；会同时关闭快速启动，可随时用 `powercfg /h on` 恢复。
+  绝不直接删除 `hiberfil.sys`。
+- 两者都必须在操作前二次确认；权限不足时引导以管理员身份重启。
+
+### 4.10 一键智能清理
+
+- 只选择 `default=True`、有大小、且当前权限可执行的类别。
+- 回收站、Windows.old、开发工具缓存永不进入默认选择。
+- 展示类别列表与预计释放量，用户确认后才执行；完成后自动重新扫描。
+- 与普通清理共用同一引擎，不新增任何放宽白名单的路径。
+
+### 4.11 软件搬家：运行中进程检测
+
+- 搬移前用 Toolhelp32 快照枚举进程，读取可执行文件全路径，
+  找出位于安装目录下的进程并提示用户先退出。
+- 只提示，不自动结束进程、不强删被占用文件；用户可取消。
+- 复制失败（含被占用文件）时删除目标副本并保留源目录，绝不丢数据。
+
+### 4.12 Shell API、COM 与 64 位句柄
+
+- 图形界面的清理/搬移在后台线程执行。`SHFileOperationW`、
+  `SHEmptyRecycleBinW`、`SHQueryRecycleBinW` 在调用线程先
+  `CoInitializeEx(COINIT_APARTMENTTHREADED)`，调用后配平 `CoUninitialize()`，
+  否则可能返回 `0x8000FFFF`（E_UNEXPECTED）。
+- 所有返回 HANDLE 的 Win32 函数（如 `FindFirstFileW`、
+  `CreateToolhelp32Snapshot`、`ShellExecuteW`）都必须声明
+  `argtypes/restype`；否则 64 位下句柄被截断，可能触发访问冲突。
+- 所有 Tk 控件更新都通过队列回到主线程执行，后台线程不直接碰 UI。
+- 所有递归遍历（目录计量、自定义扫描、大文件扫描、复制）都剪枝
+  目录联接/符号链接，避免重复计量、循环以及误操作链接目标的数据；
+  若搬移的源路径本身是联接/符号链接，直接拒绝并提示选择真实目录。
+
 ---
 
 ## 5. 权限与运行方式
 
-- 普通用户权限运行：可清理 用户Temp、浏览器缓存、缩略图、回收站、用户目录下的文件。
-- 管理员权限运行：额外可清理 `C:\Windows\Temp`、更新缓存、Windows.old、WER，以及卸载机器级软件。
-- 程序启动时自检管理员权限，界面上显示当前模式；深度清理项在无管理员权限时标灰并说明。
+- 普通用户权限运行：可清理 用户Temp、浏览器缓存、缩略图、回收站、崩溃转储、
+  用户目录下的文件，以及使用软件搬家/文件搬家。
+- 管理员权限运行：额外可清理 `C:\Windows\Temp`、更新缓存、传递优化缓存、
+  Windows.old、WER，运行 DISM 组件清理与关闭休眠，以及卸载机器级软件。
+- 程序启动时自检管理员权限，顶部与侧边栏显示当前模式。
+- 普通模式下侧边栏提供「以管理员重启」：通过 `ShellExecuteW("runas")`
+  启动新实例，UAC 确认后当前窗口关闭，无需手动右键批处理。
+- 深度清理项在无管理员权限时标为不可勾选并说明；点击会引导提权。
+- 分发包为按用户安装（`%LOCALAPPDATA%\Programs\Cpan`），安装本身不需要管理员；
+  打包后的 EXE 通过自身「以管理员重启」提权，日志写入
+  `%LOCALAPPDATA%\Cpan\logs\cpan_ops.log`，避免向 Program Files 写文件。
+- 安装器由 Inno Setup 生成，创建开始菜单/可选桌面快捷方式；图标资源来自
+  `assets/cpan.ico`，窗口、任务栏、快捷方式与卸载器共用同一图标。
 
 ## 6. 验收标准
 
 - [ ] 双击 `启动清理.bat` 即开即用，无需安装任何第三方库（纯 Python 标准库）。
+- [ ] 九个页面：概览 / 垃圾清理 / 空间分析 / 自定义清理 / 软件搬家 /
+      文件搬家 / 大文件 / 软件卸载 / 操作日志。
+- [ ] 概览显示 C 盘空间、各盘余量、可清理总量、回收站和最近操作。
 - [ ] 扫描后每个类别显示可释放空间，勾选后点清理，二次确认，完成后汇报实际释放量。
+- [ ] 一键智能清理只勾选推荐项；回收站与 Windows.old 默认不选。
 - [ ] 手动删除的文件进回收站可恢复；白名单外路径拒绝删除并给出原因。
 - [ ] 文件搬家前检查目标空间，移动后文件完整可用。
-- [ ] 软件列表可正常枚举，卸载调用系统标准卸载器。
+- [ ] 软件搬家前检测运行中进程并给出警告；失败回滚不丢源数据。
+- [ ] 空间分析可逐层下钻、显示占比，并可随时停止。
+- [ ] 软件列表可正常枚举、搜索、排序，卸载调用系统标准卸载器。
+- [ ] DISM / 关闭休眠均有明确说明、二次确认和权限检查；不手动删 WinSxS / hiberfil.sys。
+- [ ] 所有耗时任务在后台线程运行，界面保持响应。
 - [ ] 全程日志可见；被占用文件跳过不报错、不中断。
 - [ ] `python cpan_gui.py --cli scan` 可在命令行完成扫描自检。
+- [ ] `python -m pytest` 全绿（当前 154 passed / 3 skipped），无访问冲突。
+- [ ] 安装包按用户安装、无需 Python/管理员；开始菜单与可选桌面快捷方式指向
+      带新图标的 Cpan.exe；卸载后程序文件与快捷方式清理干净。
+- [ ] 安装版日志位于 `%LOCALAPPDATA%\Cpan\logs`，不写入程序安装目录。

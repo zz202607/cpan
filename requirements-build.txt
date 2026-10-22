@@ -1,0 +1,4 @@
+# Build-time only; the app itself runs on the Python standard library.
+pillow>=10.0
+pyinstaller>=6.0
+pytest>=8.0
